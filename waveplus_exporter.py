@@ -33,7 +33,7 @@ import logging
 import argparse
 
 from threading import Lock
-from bluepy.btle import UUID, Peripheral, Scanner, DefaultDelegate
+from bluepy.btle import UUID, Peripheral, Scanner, DefaultDelegate, BTLEException
 from prometheus_client import start_http_server, Metric, Summary, REGISTRY
 
 # ===================================
@@ -105,6 +105,7 @@ class WavePlus():
         self.MacAddr       = None
         self.SN            = SerialNumber
         self.uuid          = UUID("b42e2a68-ade7-11e4-89d3-123b93f75cba")
+        self.metric        = Metric('waveplus', 'airthings waveplus sensor values', 'gauge')
 
     def connect(self):
         # Auto-discover device on first connection
@@ -151,30 +152,42 @@ class WavePlus():
             self.periph = None
             self.curr_val_char = None
 
-    def collect(self):
+    def updateMetric(self):
         with self._lock:
-          self.connect()
-          sensors = self.read()
+            successful = False
+            while not successful:
+                try:
+                    log.debug('attempting to update metric...')
+                    self.connect()
+                    sensors = self.read()
 
-          humidity     = str(sensors.getValue(SENSOR_IDX_HUMIDITY))
-          radon_st_avg = str(sensors.getValue(SENSOR_IDX_RADON_SHORT_TERM_AVG))
-          radon_lt_avg = str(sensors.getValue(SENSOR_IDX_RADON_LONG_TERM_AVG))
-          temperature  = str(sensors.getValue(SENSOR_IDX_TEMPERATURE))
-          pressure     = str(sensors.getValue(SENSOR_IDX_REL_ATM_PRESSURE))
-          CO2_lvl      = str(sensors.getValue(SENSOR_IDX_CO2_LVL))
-          VOC_lvl      = str(sensors.getValue(SENSOR_IDX_VOC_LVL))
+                    humidity     = str(sensors.getValue(SENSOR_IDX_HUMIDITY))
+                    radon_st_avg = str(sensors.getValue(SENSOR_IDX_RADON_SHORT_TERM_AVG))
+                    radon_lt_avg = str(sensors.getValue(SENSOR_IDX_RADON_LONG_TERM_AVG))
+                    temperature  = str(sensors.getValue(SENSOR_IDX_TEMPERATURE))
+                    pressure     = str(sensors.getValue(SENSOR_IDX_REL_ATM_PRESSURE))
+                    CO2_lvl      = str(sensors.getValue(SENSOR_IDX_CO2_LVL))
+                    VOC_lvl      = str(sensors.getValue(SENSOR_IDX_VOC_LVL))
 
-          metric = Metric('waveplus', 'airthings waveplus sensor values', 'gauge')
-          metric.add_sample('humidity_percent', value=humidity, labels={})
-          metric.add_sample('radon_short_term_avg_becquerels', value=radon_st_avg, labels={})
-          metric.add_sample('radon_long_term_avg_becquerels', value=radon_lt_avg, labels={})
-          metric.add_sample('temperature_celsius', value=temperature, labels={})
-          metric.add_sample('pressure_pascal', value=pressure, labels={})
-          metric.add_sample('carbondioxide_ppm', value=CO2_lvl, labels={})
-          metric.add_sample('voc_ppb', value=VOC_lvl, labels={})
+                    metric = Metric('waveplus', 'airthings waveplus sensor values', 'gauge')
+                    metric.add_sample('humidity_percent', value=humidity, labels={})
+                    metric.add_sample('radon_short_term_avg_becquerels', value=radon_st_avg, labels={})
+                    metric.add_sample('radon_long_term_avg_becquerels', value=radon_lt_avg, labels={})
+                    metric.add_sample('temperature_celsius', value=temperature, labels={})
+                    metric.add_sample('pressure_pascal', value=pressure, labels={})
+                    metric.add_sample('carbondioxide_ppm', value=CO2_lvl, labels={})
+                    metric.add_sample('voc_ppb', value=VOC_lvl, labels={})
 
-          self.disconnect()
-          yield metric
+                    self.disconnect()
+                    self.metric = metric
+                    successful = True
+                    log.debug('successfully updated metric')
+                except BTLEException:
+                    log.debug('error getting data from device--sleeping before retry', exc_info=1)
+                    time.sleep(1)
+
+    def collect(self):
+        yield self.metric
 
 class Sensors():
     def __init__(self):
@@ -217,6 +230,7 @@ try:
     log.info('listening on http://%s:%d/metrics', args.bind, int(args.port))
 
     while True:
+        waveplus.updateMetric()
         time.sleep(SamplePeriod)
 
 finally:

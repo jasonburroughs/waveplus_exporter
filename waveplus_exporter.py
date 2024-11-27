@@ -155,6 +155,7 @@ class WavePlus():
     def updateMetric(self):
         with self._lock:
             successful = False
+            failures = 0
             while not successful:
                 try:
                     log.debug('attempting to update metric...')
@@ -184,6 +185,10 @@ class WavePlus():
                     log.debug('successfully updated metric')
                 except BTLEException:
                     log.debug('error getting data from device--sleeping before retry', exc_info=1)
+                    failures += 1
+                    if failures > (60 * 60):
+                        log.error('Clearing metrics after failing to collect new sensor data for over an hour')
+                        self.metric = Metric('waveplus', 'airthings waveplus sensor values', 'gauge')
                     time.sleep(1)
 
     def collect(self):
